@@ -3,16 +3,18 @@ import type { BrowserWindow } from 'electron';
 const { app, BrowserWindow: BW } = electron;
 import path from 'path';
 import { autoUpdater } from 'electron-updater';
-import { WhatsAppService } from './whatsapp';
+import { EvolutionService } from './evolutionService';
 
 let mainWindow: BrowserWindow | null = null;
-let waService: WhatsAppService | null = null;
+let evolutionService: EvolutionService | null = null;
 
 function createWindow() {
   mainWindow = new BW({
-    width: 1024,
-    height: 768,
-    title: 'FCSender',
+    width: 1120,
+    height: 800,
+    minWidth: 900,
+    minHeight: 650,
+    title: 'FCSender - Distribución Interna de Comunicaciones',
     icon: path.join(__dirname, process.env.VITE_DEV_SERVER_URL ? '../../public/favicon.ico' : '../dist/favicon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -28,11 +30,11 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
-  // Iniciar el servicio de WhatsApp
-  waService = new WhatsAppService(mainWindow);
-  waService.start();
+  // Iniciar el motor local de Evolution API
+  evolutionService = new EvolutionService(mainWindow);
+  evolutionService.start();
 
-  // Evitar que el HTML de React sobrescriba el título de la ventana
+  // Evitar que el HTML sobrescriba el título de la ventana
   mainWindow.on('page-title-updated', (evt) => {
     evt.preventDefault();
   });
@@ -44,13 +46,13 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
-  // Buscar actualizaciones de forma silenciosa al abrir la app
-  autoUpdater.checkForUpdatesAndNotify();
+  // Buscar actualizaciones en producción
+  autoUpdater.checkForUpdatesAndNotify().catch(() => {});
 });
 
 app.on('window-all-closed', () => {
-  if (waService) {
-    waService.stop().catch(console.error);
+  if (evolutionService) {
+    evolutionService.stop().catch(console.error);
   }
   if (process.platform !== 'darwin') {
     app.quit();

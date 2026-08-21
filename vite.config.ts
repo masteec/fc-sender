@@ -19,7 +19,7 @@ export default defineConfig({
   ],
   server: {
     watch: {
-      ignored: ['**/.wwebjs_auth/**'],
+      ignored: ['**/evolution_auth/**', '**/.wwebjs_auth/**'],
     },
   },
 })
