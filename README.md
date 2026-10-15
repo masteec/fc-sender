@@ -29,11 +29,14 @@ A partir de la versión **v2.0**, el software descartó por completo soluciones 
 - **100% Empaquetable**: No requiere Docker, Redis, PostgreSQL ni instalación de navegadores externos en las PCs de los usuarios. Funciona *out-of-the-box* con el instalador `.exe`.
 - Vinculación instantánea mediante código QR reactivo y reconexión automática resiliente.
 
-### 2. 🎨 Píxel Fantasma 2.0 (Mutación de Hash Criptográfico)
-- Cada imagen enviada es procesada al vuelo con [`sharp`](https://sharp.pixelplumbing.com/):
-  - Eliminación total de metadatos de rastreo (EXIF/ICC).
-  - Micro-variación imperceptible de brillo, contraste, saturación y compresión de entropía.
-  - **Resultado**: Cada destinatario recibe un archivo con un hash criptográfico (**MD5/SHA256**) único, impidiendo que los filtros de spam identifiquen el archivo como un creativo masivo repetido.
+### 2. 🎨 Píxel Fantasma 2.0 & Vector Fantasma (Mutación Criptográfica de Imagen y Video)
+- **Imágenes (Píxel Fantasma 2.0)**:
+  - Procesamiento al vuelo con [`sharp`](https://sharp.pixelplumbing.com/): eliminación total de metadatos de rastreo (EXIF/ICC), micro-variación imperceptible de brillo (+0.001%) y saturación, y compresión de entropía variable.
+- **Videos (Vector Fantasma con FFmpeg Embebido)**:
+  - Soporte de videos (`.mp4`, `.mov`) de hasta 16-64 MB con normalización H.264/AAC y ubicación de átomos `moov` al inicio (`+faststart`) para streaming instantáneo en WhatsApp.
+  - **Modo Rápido (ISOBMFF Box Injection)**: Inserción de cajas `free` con payload de ruido criptográfico por destinatario en menos de 10 ms, generando un hash MD5/SHA256 100% único sin consumir CPU.
+  - **Modo Profundo (Acústico)**: Remuxing con FFmpeg y micro-variación de la forma de onda de audio (`volume=1.000x`) y metadatos dinámicos.
+- **Resultado**: Cada destinatario recibe un archivo con un hash criptográfico y huella perceptual únicos, impidiendo que los filtros anti-spam de WhatsApp detecten el creativo como un archivo masivo reenviado.
 
 ### 3. ✍️ Simulación de Comportamiento Humano
 - **Presencia realista**: Ciclo `available` $\rightarrow$ lectura/inactividad $\rightarrow$ `composing` ("Escribiendo...") con duración proporcional a la cantidad de caracteres $\rightarrow$ `paused` $\rightarrow$ envío.

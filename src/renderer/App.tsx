@@ -6,7 +6,7 @@ import {
   QrCode, Loader2, CheckCircle, FileSpreadsheet,
   Image as ImageIcon, Send, X, AlertCircle, Play, SquareSquare, Plus,
   ShieldCheck, RefreshCw, LogOut, Check, Sparkles, PhoneCall,
-  Ban, Download, Trash2, UserX
+  Ban, Download, Trash2, UserX, Video, AlertTriangle
 } from 'lucide-react';
 
 export interface WhatsAppUser {
@@ -27,6 +27,8 @@ export interface SendTask {
   number: string;
   text: string;
   imagePath?: string;
+  mediaPath?: string;
+  mediaType?: 'image' | 'video';
 }
 
 export interface NumberStatus {
@@ -73,6 +75,7 @@ declare global {
           autoValidate?: boolean;
           includeOptOut?: boolean;
           optOutText?: string;
+          videoMutationMode?: 'fast' | 'deep';
         }
       ) => void;
       stopBulkSend: () => void;
@@ -93,10 +96,11 @@ declare global {
 }
 
 const SPINTAX_TAGS = [
-  { label: 'Saludo', value: '{Hola|Buen día|Estimado/a|Saludos cordiales}' },
-  { label: 'Identificación', value: '{Te escribimos desde la dirección|Nos comunicamos de gerencia|Desde administración}' },
-  { label: 'Aviso', value: '{te compartimos el siguiente comunicado|adjuntamos la siguiente información oficial|hacemos llegar el aviso}' },
-  { label: 'Cierre', value: '{Quedamos a su disposición.|Saludos atentos.|Gracias por su atención.}' },
+  { label: 'Saludo', value: '{Hola|Buen día|Hola, ¿cómo estás?|Saludos|Qué tal}' },
+  { label: 'Introducción', value: '{Te escribo para contarte que|Paso por aquí para compartirte que|Queríamos hacerte llegar|Aprovecho para comentarte que}' },
+  { label: 'Novedad / Info', value: '{tenemos una novedad especial|preparamos una información importante|queremos mostrarte nuestra propuesta|tenemos información de tu interés}' },
+  { label: 'Llamado a la acción', value: '{¿Te gustaría conocer más detalles?|Si te interesa, escríbeme por aquí.|Avísame si deseas que coordinemos.|Déjanos saber tu respuesta si deseas más info.}' },
+  { label: 'Despedida', value: '{¡Que tengas un excelente día!|¡Un saludo cordial!|¡Hablamos pronto!|¡Muchos éxitos!}' },
 ];
 
 const ACCEPTED_FILE_TYPES = {
@@ -126,8 +130,18 @@ function App() {
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState<string>('');
 
-  const [imagePath, setImagePath] = useState(() => localStorage.getItem('ws_imgPath') || '');
-  const [imagePreview, setImagePreview] = useState(() => localStorage.getItem('ws_imgPrev') || '');
+  const [mediaPath, setMediaPath] = useState(() => localStorage.getItem('ws_imgPath') || '');
+  const [mediaPreview, setMediaPreview] = useState(() => localStorage.getItem('ws_imgPrev') || '');
+  const [mediaType, setMediaType] = useState<'image' | 'video' | null>(() => {
+    const p = localStorage.getItem('ws_imgPath') || '';
+    if (/\.(mp4|mov|m4v|3gp|mkv|webm)$/i.test(p)) return 'video';
+    if (p) return 'image';
+    return null;
+  });
+  const [mediaSizeMB, setMediaSizeMB] = useState<number | null>(null);
+  const [videoMutationMode, setVideoMutationMode] = useState<'fast' | 'deep'>(() =>
+    (localStorage.getItem('ws_vmm') as 'fast' | 'deep') || 'fast'
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -162,16 +176,17 @@ function App() {
     localStorage.setItem('ws_rest', restMinutes.toString());
     localStorage.setItem('ws_minD', minDelay.toString());
     localStorage.setItem('ws_maxD', maxDelay.toString());
-    localStorage.setItem('ws_imgPath', imagePath);
+    localStorage.setItem('ws_imgPath', mediaPath);
+    localStorage.setItem('ws_vmm', videoMutationMode);
     localStorage.setItem('ws_optout', includeOptOut.toString());
     localStorage.setItem('ws_optout_txt', optOutText);
     try {
-      if (imagePreview) localStorage.setItem('ws_imgPrev', imagePreview);
+      if (mediaPreview && mediaType === 'image') localStorage.setItem('ws_imgPrev', mediaPreview);
       else localStorage.removeItem('ws_imgPrev');
     } catch {
       // Ignorar si la imagen supera la cuota
     }
-  }, [messageText, numbers, batchSize, restMinutes, minDelay, maxDelay, imagePath, imagePreview, includeOptOut, optOutText]);
+  }, [messageText, numbers, batchSize, restMinutes, minDelay, maxDelay, mediaPath, mediaPreview, mediaType, videoMutationMode, includeOptOut, optOutText]);
 
   // Cargar Blacklist inicial
   const refreshBlacklist = useCallback(async () => {
@@ -269,10 +284,29 @@ function App() {
   }, []);
 
   const processAndAddNumbers = useCallback((input: string, source: 'manual' | 'file') => {
-    const rawNumbers = input.split(/[\n,\t; ]+/);
-    const processed = rawNumbers.map(n => {
+    // Dividir por saltos de línea, comas, punto y coma o tabuladores (preservando espacios internos en números como '098 561 1627')
+    const rawTokens = input.split(/[\r\n,;\t]+/);
+    const candidateList: string[] = [];
+
+    rawTokens.forEach(token => {
+      const trimmed = token.trim();
+      if (!trimmed) return;
+
+      // Si el usuario ingresó múltiples números separados por espacios (ej: "0985611627 0991234567")
+      const spaceParts = trimmed.split(/\s+/);
+      const isMultipleIndependentNumbers = spaceParts.length > 1 && spaceParts.every(p => p.replace(/\D/g, '').length >= 8);
+
+      if (isMultipleIndependentNumbers) {
+        spaceParts.forEach(p => candidateList.push(p));
+      } else {
+        // Es un único número con espacios internos (ej: "098 561 1627" -> se mantiene como un solo número)
+        candidateList.push(trimmed);
+      }
+    });
+
+    const processed = candidateList.map(n => {
       const clean = n.replace(/\D/g, '');
-      if (!clean) return null;
+      if (!clean || clean.length < 8) return null;
 
       if (clean.startsWith('09') && clean.length === 10) {
         return '+593' + clean.substring(1);
@@ -285,7 +319,7 @@ function App() {
       } else if (clean.length === 10) {
         return '+1' + clean;
       }
-      return n.includes('+') ? '+' + clean : '+' + clean;
+      return '+' + clean;
     }).filter(Boolean) as string[];
 
     if (processed.length > 0) {
@@ -402,14 +436,25 @@ function App() {
     const extractedNumbers: string[] = [];
     rows.forEach(row => {
       row.forEach(cell => {
-        const str = String(cell).trim();
-        if (/^[0-9+\-\s]{8,22}$/.test(str) && str.replace(/\D/g, '').length >= 8) {
-          extractedNumbers.push(str);
-        }
+        if (cell === null || cell === undefined) return;
+        const rawStr = String(cell).trim();
+        if (!rawStr) return;
+
+        // Si la celda contiene saltos de línea con múltiples números, procesar cada línea
+        const lines = rawStr.split(/[\r\n,;]+/);
+        lines.forEach(line => {
+          const trimmed = line.trim();
+          if (!trimmed) return;
+          // Si la celda contiene un número con espacios internos (ej: '098 561 1627' o '+593 98 561 1627')
+          const digits = trimmed.replace(/\D/g, '');
+          if (digits.length >= 8 && digits.length <= 16) {
+            extractedNumbers.push(trimmed.startsWith('+') ? '+' + digits : digits);
+          }
+        });
       });
     });
 
-    processAndAddNumbers(extractedNumbers.join(','), 'file');
+    processAndAddNumbers(extractedNumbers.join('\n'), 'file');
   }, [processAndAddNumbers]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
@@ -445,22 +490,35 @@ function App() {
     multiple: false
   });
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMediaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0] as any;
-      setImagePath(file.path);
+      const filePath = file.path || '';
+      const sizeMB = Number((file.size / (1024 * 1024)).toFixed(2));
+      setMediaSizeMB(sizeMB);
+      setMediaPath(filePath);
 
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setImagePreview(ev.target?.result as string);
-      };
-      reader.readAsDataURL(file);
+      const isVid = file.type?.startsWith('video/') || /\.(mp4|mov|m4v|3gp|mkv|webm)$/i.test(file.name || filePath);
+      setMediaType(isVid ? 'video' : 'image');
+
+      if (isVid) {
+        const url = URL.createObjectURL(file);
+        setMediaPreview(url);
+      } else {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          setMediaPreview(ev.target?.result as string);
+        };
+        reader.readAsDataURL(file);
+      }
     }
   };
 
-  const removeImage = () => {
-    setImagePath('');
-    setImagePreview('');
+  const removeMedia = () => {
+    setMediaPath('');
+    setMediaPreview('');
+    setMediaType(null);
+    setMediaSizeMB(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -497,7 +555,9 @@ function App() {
     const tasks: SendTask[] = numbers.map(number => ({
       number: number.replace(/\D/g, ''),
       text: messageText,
-      imagePath: imagePreview || imagePath || undefined
+      imagePath: mediaPath || mediaPreview || undefined,
+      mediaPath: mediaPath || mediaPreview || undefined,
+      mediaType: mediaType || undefined
     }));
 
     window.electronAPI.startBulkSend(tasks, {
@@ -507,7 +567,8 @@ function App() {
       maxDelay,
       autoValidate: true,
       includeOptOut,
-      optOutText: includeOptOut ? optOutText : ''
+      optOutText: includeOptOut ? optOutText : '',
+      videoMutationMode
     });
   };
 
@@ -766,7 +827,7 @@ function App() {
                   Evolution
                 </span>
                 <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-md">
-                  v2.0.0
+                  v2.1.0
                 </span>
               </h1>
               {waStatus.user && (
@@ -997,44 +1058,73 @@ function App() {
             )}
           </section>
 
-          {/* Sección 2: Creativo Multimedia (Píxel Fantasma 2.0) */}
+          {/* Sección 2: Creativo Multimedia (Píxel / Vector Fantasma) */}
           <section>
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                2. Adjunto Multimedia <span className="text-slate-400 font-normal normal-case">(Opcional)</span>
+              <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                2. Adjunto Multimedia <span className="text-slate-400 font-normal normal-case">(Imagen o Video)</span>
               </h2>
+              {mediaSizeMB !== null && (
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                  mediaSizeMB > 16 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'
+                }`}>
+                  {mediaSizeMB} MB
+                </span>
+              )}
             </div>
 
-            {!imagePreview ? (
+            {!mediaPreview ? (
               <div
                 onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-slate-200 hover:border-slate-300 hover:bg-slate-50/60 rounded-2xl p-5 text-center cursor-pointer transition-all flex flex-col items-center justify-center min-h-[100px]"
+                className="border-2 border-dashed border-slate-200 hover:border-slate-300 hover:bg-slate-50/60 rounded-2xl p-5 text-center cursor-pointer transition-all flex flex-col items-center justify-center min-h-[105px]"
               >
-                <ImageIcon className="w-6 h-6 text-slate-400 mb-1.5" />
-                <p className="font-medium text-slate-600 text-xs">Cargar imagen de comunicado</p>
-                <span className="text-[10px] text-slate-400 mt-0.5">Se aplicará Píxel Fantasma 2.0 (Hash único anti-spam)</span>
+                <div className="flex items-center gap-2 mb-1.5 text-slate-400">
+                  <ImageIcon className="w-5 h-5" />
+                  <Video className="w-5 h-5" />
+                </div>
+                <p className="font-medium text-slate-600 text-xs">Cargar imagen o video de comunicado</p>
+                <span className="text-[10px] text-slate-400 mt-0.5">Soporta JPG, PNG, MP4, MOV (Mutación de Hash Anti-Ban por contacto)</span>
               </div>
             ) : (
-              <div className="relative rounded-2xl overflow-hidden border border-slate-200 group shadow-sm">
-                <img src={imagePreview} alt="Preview" className="w-full h-36 object-cover" />
-                <div className="absolute inset-0 bg-slate-900/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+              <div className="relative rounded-2xl overflow-hidden border border-slate-200 group shadow-sm bg-slate-900">
+                {mediaType === 'video' ? (
+                  <video
+                    src={mediaPreview}
+                    controls
+                    className="w-full h-44 object-contain bg-black"
+                  />
+                ) : (
+                  <img src={mediaPreview} alt="Preview" className="w-full h-36 object-cover" />
+                )}
+                <div className="absolute top-2.5 right-2.5 opacity-90 group-hover:opacity-100 transition-opacity">
                   <button
-                    onClick={removeImage}
-                    className="bg-white text-rose-600 px-3.5 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 hover:bg-rose-50 shadow-md transition-all"
+                    onClick={removeMedia}
+                    className="bg-white/90 backdrop-blur-md text-rose-600 px-2.5 py-1 rounded-lg font-bold text-[11px] flex items-center gap-1 hover:bg-rose-50 shadow-md transition-all"
                   >
-                    <X className="w-3.5 h-3.5" /> Quitar Imagen
+                    <X className="w-3.5 h-3.5" /> Quitar
                   </button>
                 </div>
-                <div className="absolute top-2.5 left-2.5 bg-indigo-900/90 backdrop-blur-md text-white text-[11px] px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-bold shadow-md">
-                  <Sparkles className="w-3 h-3 text-amber-300" /> Píxel Fantasma 2.0 Activo
+                <div className="absolute top-2.5 left-2.5 bg-indigo-900/90 backdrop-blur-md text-white text-[10px] px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-bold shadow-md">
+                  <Sparkles className="w-3 h-3 text-amber-300" />
+                  {mediaType === 'video' ? 'Vector Fantasma Activo (Hash Único)' : 'Píxel Fantasma 2.0 Activo'}
                 </div>
               </div>
             )}
+
+            {mediaType === 'video' && mediaSizeMB !== null && mediaSizeMB > 16 && (
+              <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-[11px] flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Aviso de peso:</strong> Este video supera los 16 MB ({mediaSizeMB} MB). WhatsApp podría demorar la descarga o fallar en conexiones móviles lentas. Se recomienda enviar videos &lt; 16 MB.
+                </span>
+              </div>
+            )}
+
             <input
               type="file"
-              accept="image/*"
+              accept="image/*,video/mp4,video/quicktime,video/x-msvideo,.mp4,.mov"
               ref={fileInputRef}
-              onChange={handleImageChange}
+              onChange={handleMediaChange}
               className="hidden"
             />
           </section>
@@ -1102,6 +1192,44 @@ function App() {
                   s
                 </label>
               </div>
+
+              {mediaType === 'video' && (
+                <>
+                  <div className="h-px w-full bg-slate-100"></div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-700 font-semibold flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                      Motor Vector Fantasma (Video):
+                    </span>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setVideoMutationMode('fast')}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                          videoMutationMode === 'fast'
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                        title="Inyección ISOBMFF de átomos libres (<10ms). Hash criptográfico 100% único sin consumo de CPU."
+                      >
+                        ⚡ Rápido (Recomendado)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setVideoMutationMode('deep')}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                          videoMutationMode === 'deep'
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                        title="Remuxing FFmpeg con micro-variación acústica y metadatos dinámicos."
+                      >
+                        🔬 Profundo (Acústico)
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </section>
 
@@ -1113,24 +1241,27 @@ function App() {
               </h2>
             </div>
 
-            <div className="flex flex-wrap gap-1.5 mb-2.5">
+            <div className="flex flex-wrap gap-1.5 mb-1.5">
               {SPINTAX_TAGS.map((tag) => (
                 <button
                   key={tag.label}
                   onClick={() => insertSpintax(tag.value)}
-                  className="text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-lg transition-colors border border-indigo-100"
+                  className="text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded-lg transition-colors border border-indigo-100 shadow-2xs"
                 >
                   + {tag.label}
                 </button>
               ))}
             </div>
+            <p className="text-[10px] text-slate-400 mb-2">
+              💡 Puedes editar las opciones de las almohadillas o escribir tu propio Spintax: <code className="bg-slate-200/60 px-1 py-0.5 rounded text-slate-600 font-mono">{"{opción 1|opción 2}"}</code> para alternar textos en cada contacto.
+            </p>
 
             <textarea
               ref={textAreaRef}
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
               className="flex-1 w-full min-h-[100px] p-3.5 text-xs leading-relaxed bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none resize-none mb-3"
-              placeholder="Escribe el comunicado aquí. Usa {Hola|Buen día} para alternar sinónimos automáticamente..."
+              placeholder="Escribe tu mensaje aquí. Usa o personaliza cualquier Spintax con {opción 1|opción 2|opción 3} para enviar variantes distintas a cada destinatario..."
             />
 
             {/* Configuración Opt-Out Footer */}

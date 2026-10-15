@@ -75,7 +75,7 @@ export class EvolutionService {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(state.keys, logger),
         },
-        browser: ['FCSender Evolution', 'Desktop', '2.0.0'],
+        browser: ['FCSender Evolution', 'Desktop', '2.1.0'],
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
         markOnlineOnConnect: true,
@@ -153,9 +153,12 @@ export class EvolutionService {
           console.log('Evolution: Conexión abierta con éxito');
           this.reconnectAttempts = 0;
 
-          const rawId = this.sock?.user?.id || '';
-          const cleanPhone = rawId.split(':')[0].replace(/\D/g, '') || rawId.replace(/\D/g, '');
-          const userName = this.sock?.user?.name || 'Directivo';
+          // Resolver número real del remitente/directivo evitando identificadores LID internos
+          const selfJid = await this.getSelfJid();
+          const cleanPhone = selfJid
+            ? selfJid.split('@')[0]
+            : (this.sock?.user?.id?.split(':')[0].replace(/\D/g, '') || '');
+          const userName = this.sock?.user?.name || (this.sock as any)?.authState?.creds?.me?.name || 'Remitente';
 
           this.bulkSender = new BulkSenderService(this, this.window);
 
@@ -163,7 +166,7 @@ export class EvolutionService {
             status: 'READY',
             message: 'Conectado y listo para envíos',
             user: {
-              id: rawId,
+              id: this.sock?.user?.id || '',
               phone: cleanPhone,
               name: userName
             }
@@ -297,10 +300,26 @@ export class EvolutionService {
     return { results, validCount, invalidCount };
   }
 
+  public async subscribePresence(jid: string) {
+    if (!this.sock) return;
+    try {
+      if (typeof this.sock.presenceSubscribe === 'function') {
+        await this.sock.presenceSubscribe(jid);
+      }
+    } catch (e) {
+      console.warn('Error al suscribir presencia:', e);
+    }
+  }
+
   public async sendPresence(jid: string, type: 'available' | 'composing' | 'paused') {
     if (!this.sock) return;
     try {
       if (type === 'available') {
+        // Baileys requiere un name en creds.me para no descartar el evento available
+        const me = (this.sock.user || (this.sock as any).authState?.creds?.me) as any;
+        if (me && !me.name) {
+          me.name = 'FCSender';
+        }
         await this.sock.sendPresenceUpdate('available');
       } else {
         await this.sock.sendPresenceUpdate(type, jid);
@@ -317,32 +336,79 @@ export class EvolutionService {
 
   public async sendMediaMessage(jid: string, buffer: Buffer, mimetype: string, caption?: string) {
     if (!this.sock) throw new Error('Cliente no conectado');
-    return await this.sock.sendMessage(jid, {
-      image: buffer,
-      mimetype,
-      caption: caption || undefined,
-    });
+    if (mimetype.startsWith('video/')) {
+      return await this.sock.sendMessage(jid, {
+        video: buffer,
+        mimetype: 'video/mp4',
+        caption: caption || undefined,
+        gifPlayback: false
+      });
+    } else {
+      return await this.sock.sendMessage(jid, {
+        image: buffer,
+        mimetype,
+        caption: caption || undefined,
+      });
+    }
   }
 
-  public getSelfJid(): string | null {
-    if (!this.sock?.user?.id) return null;
-    const raw = this.sock.user.id;
-    const phone = raw.split(':')[0].replace(/\D/g, '') || raw.split('@')[0].replace(/\D/g, '');
-    return `${phone}@s.whatsapp.net`;
+  public async getSelfJid(): Promise<string | null> {
+    if (!this.sock) return null;
+    const me = (this.sock.user || (this.sock as any).authState?.creds?.me) as any;
+    if (!me) return null;
+
+    // 1. Si viene phoneNumber explícito en el objeto Contact (ej: 593989032887@s.whatsapp.net)
+    if (me.phoneNumber) {
+      const clean = me.phoneNumber.split('@')[0].split(':')[0].replace(/\D/g, '');
+      if (clean) return `${clean}@s.whatsapp.net`;
+    }
+
+    // 2. Si el ID ya es un JID telefónico (@s.whatsapp.net)
+    const rawId = me.id || '';
+    if (rawId.includes('@s.whatsapp.net')) {
+      const clean = rawId.split('@')[0].split(':')[0].replace(/\D/g, '');
+      if (clean) return `${clean}@s.whatsapp.net`;
+    }
+
+    // 3. Si el ID es un LID (@lid), resolver el mapeo inverso con Signal Repository
+    if (rawId.includes('@lid') || me.lid) {
+      const targetLid = rawId.includes('@lid') ? rawId : me.lid;
+      try {
+        const repo = this.sock.signalRepository as any;
+        let pnJid = await repo?.lidMapping?.getPNForLID?.(targetLid);
+        if (!pnJid && repo?.getPNForLID) {
+          pnJid = await repo.getPNForLID(targetLid);
+        }
+        if (pnJid) {
+          const cleanPn = pnJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+          if (cleanPn) return `${cleanPn}@s.whatsapp.net`;
+        }
+      } catch (lidErr) {
+        console.warn('Error resolviendo self LID a teléfono:', lidErr);
+      }
+    }
+
+    // 4. Fallback numérico si no es LID
+    if (!rawId.includes('@lid')) {
+      const fallbackDigits = rawId.split(':')[0].replace(/\D/g, '');
+      if (fallbackDigits) return `${fallbackDigits}@s.whatsapp.net`;
+    }
+
+    return null;
   }
 
   public async sendReport(reportMsg: string): Promise<boolean> {
-    const selfJid = this.getSelfJid();
+    const selfJid = await this.getSelfJid();
     if (!selfJid || !this.sock) {
-      console.warn('No se puede enviar auto-reporte: JID propio no identificado.');
+      console.warn('No se puede enviar auto-reporte: JID propio no identificado o cuenta en LID sin resolver.');
       return false;
     }
     try {
       await this.sock.sendMessage(selfJid, { text: reportMsg });
-      console.log('Evolution: Auto-reporte enviado exitosamente al directivo:', selfJid);
+      console.log('Evolution: Auto-reporte enviado exitosamente al directivo/remitente:', selfJid);
       return true;
     } catch (e) {
-      console.error('Evolution: Error al enviar auto-reporte al directivo:', e);
+      console.error('Evolution: Error al enviar auto-reporte al directivo/remitente:', e);
       return false;
     }
   }
@@ -448,6 +514,7 @@ export class EvolutionService {
       autoValidate?: boolean;
       includeOptOut?: boolean;
       optOutText?: string;
+      videoMutationMode?: 'fast' | 'deep';
     }) => {
       if (this.bulkSender) {
         this.bulkSender.addTasks(tasks, config);

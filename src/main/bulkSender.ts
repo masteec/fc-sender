@@ -1,13 +1,14 @@
 import type { BrowserWindow } from 'electron';
-import sharp from 'sharp';
-import fs from 'fs/promises';
 import type { EvolutionService } from './evolutionService';
 import { blacklistService } from './blacklistService';
+import { MediaProcessor, type VideoMutationMode } from './mediaProcessor';
 
 export interface SendTask {
   number: string;
   text: string;
   imagePath?: string;
+  mediaPath?: string;
+  mediaType?: 'image' | 'video';
 }
 
 export class BulkSenderService {
@@ -23,6 +24,7 @@ export class BulkSenderService {
   private autoValidate = true;
   private includeOptOut = true;
   private optOutText = '\n\n_Si quieres dejar de recibir promociones, responde "SALIR"_';
+  private videoMutationMode: VideoMutationMode = 'fast';
 
   constructor(evolution: EvolutionService, window: BrowserWindow) {
     this.evolution = evolution;
@@ -39,6 +41,7 @@ export class BulkSenderService {
       autoValidate?: boolean;
       includeOptOut?: boolean;
       optOutText?: string;
+      videoMutationMode?: VideoMutationMode;
     }
   ) {
     if (config) {
@@ -49,6 +52,7 @@ export class BulkSenderService {
       this.autoValidate = config.autoValidate !== undefined ? config.autoValidate : true;
       this.includeOptOut = config.includeOptOut !== undefined ? config.includeOptOut : true;
       if (config.optOutText) this.optOutText = config.optOutText;
+      if (config.videoMutationMode) this.videoMutationMode = config.videoMutationMode;
     }
     this.tasks.push(...newTasks);
     if (!this.isSending) {
@@ -60,40 +64,20 @@ export class BulkSenderService {
     this.shouldStop = true;
   }
 
-  // Spintax Parser recursivo/aleatorio
-  private parseSpintax(text: string): string {
-    return text.replace(/\{([^{}]+)\}/g, (_, contents) => {
-      const choices = contents.split('|');
-      return choices[Math.floor(Math.random() * choices.length)];
-    });
-  }
-
-  // Píxel Fantasma 2.0: Mutación indetectable de hash criptográfico (MD5/SHA256) por cada destinatario
-  private async processImage(imageData: string): Promise<Buffer> {
-    let buffer: Buffer;
-    if (imageData.startsWith('data:image')) {
-      const base64Data = imageData.split(';base64,').pop()!;
-      buffer = Buffer.from(base64Data, 'base64');
-    } else {
-      buffer = await fs.readFile(imageData);
+  // Spintax Parser recursivo, dinámico y tolerante a espacios/saltos de línea
+  public parseSpintax(text: string): string {
+    let result = text;
+    const spintaxRegex = /\{([^{}]+)\}/g;
+    let iterations = 0;
+    while (spintaxRegex.test(result) && iterations < 20) {
+      result = result.replace(spintaxRegex, (_, contents) => {
+        const choices = contents.split('|');
+        const picked = choices[Math.floor(Math.random() * choices.length)];
+        return picked.trim();
+      });
+      iterations++;
     }
-
-    const brightnessMod = 1 + (Math.random() * 0.006 + 0.001);
-    const saturationMod = 1 + (Math.random() * 0.004 - 0.002);
-
-    const processedBuffer = await sharp(buffer)
-      .withMetadata({ exif: {} })
-      .modulate({
-        brightness: brightnessMod,
-        saturation: saturationMod
-      })
-      .jpeg({
-        quality: Math.floor(Math.random() * 3) + 90,
-        chromaSubsampling: '4:4:4'
-      })
-      .toBuffer();
-
-    return processedBuffer;
+    return result;
   }
 
   private async start() {
@@ -104,6 +88,7 @@ export class BulkSenderService {
     let errorCount = 0;
     let filteredCount = 0;
     let blacklistedCount = 0;
+    let consecutiveErrors = 0;
     const initialTotal = this.tasks.length;
     const startTime = Date.now();
 
@@ -175,6 +160,27 @@ export class BulkSenderService {
       }
     }
 
+    // Preparación y normalización de video master si la campaña incluye video
+    let normalizedVideoMaster: string | null = null;
+    const sampleTask = this.tasks.find(t => t.mediaPath || t.imagePath);
+    const mediaSource = sampleTask?.mediaPath || sampleTask?.imagePath;
+    if (mediaSource && MediaProcessor.isVideo(mediaSource)) {
+      this.window.webContents.send('bulk-log', {
+        msg: 'Optimizando video master (+faststart / H.264 para WhatsApp)...',
+        type: 'info'
+      });
+      try {
+        normalizedVideoMaster = await MediaProcessor.normalizeVideoMaster(mediaSource);
+        this.window.webContents.send('bulk-log', {
+          msg: `Video master optimizado. Motor Vector Fantasma activo (Modo: ${this.videoMutationMode === 'deep' ? 'Profundo' : 'Criptográfico Rápido'}).`,
+          type: 'info'
+        });
+      } catch (vErr: any) {
+        console.warn('Advertencia al normalizar video master, usando original:', vErr);
+        normalizedVideoMaster = mediaSource;
+      }
+    }
+
     while (this.tasks.length > 0) {
       if (this.shouldStop) {
         this.window.webContents.send('bulk-log', { msg: 'Campaña detenida por el operador', type: 'info' });
@@ -220,13 +226,14 @@ export class BulkSenderService {
         this.window.webContents.send('bulk-delay', { delay: delayMs });
 
         // Simulación Humana de Escritura y Presencia
-        const typingTimeMs = Math.min(Math.max(message.length * 70, 1500), 18000) + Math.floor(Math.random() * 1500);
+        const typingTimeMs = Math.min(Math.max(message.length * 65, 2000), 16000) + Math.floor(Math.random() * 1200);
         const idleTimeMs = Math.max(delayMs - typingTimeMs, 0);
 
-        // 1. Estado en línea general
+        // 1. Suscribir presencia al chat para que WhatsApp encamine los estados al dispositivo receptor
+        await this.evolution.subscribePresence(jid);
         await this.evolution.sendPresence(jid, 'available');
 
-        // 2. Tiempo de lectura / inactividad previo
+        // 2. Tiempo de lectura / inactividad previo (pausa humana natural)
         if (idleTimeMs > 0) {
           await new Promise(resolve => setTimeout(resolve, idleTimeMs));
         }
@@ -236,30 +243,67 @@ export class BulkSenderService {
           break;
         }
 
-        // 3. Simulación de "Escribiendo..."
-        await this.evolution.sendPresence(jid, 'composing');
-        await new Promise(resolve => setTimeout(resolve, typingTimeMs));
-        await this.evolution.sendPresence(jid, 'paused');
+        // 3. Simulación Humana de "Escribiendo..." sostenida con pulsos periódicos
+        // WhatsApp expira el estado 'composing' a los 5 segundos, por lo que enviamos un pulso cada 4s
+        const pulseInterval = 4000;
+        let typingElapsed = 0;
+        while (typingElapsed < typingTimeMs) {
+          if (this.shouldStop) break;
+          await this.evolution.sendPresence(jid, 'composing');
+          const sleepTime = Math.min(pulseInterval, typingTimeMs - typingElapsed);
+          await new Promise(resolve => setTimeout(resolve, sleepTime));
+          typingElapsed += sleepTime;
+        }
 
-        // 4. Envío de mensaje
-        if (task.imagePath) {
-          const imageBuffer = await this.processImage(task.imagePath);
-          await this.evolution.sendMediaMessage(jid, imageBuffer, 'image/jpeg', message);
+        if (this.shouldStop) {
+          this.tasks.unshift(task);
+          break;
+        }
+
+        // 4. Envío de mensaje (WhatsApp finaliza el estado 'composing' automáticamente al recibir el payload)
+        const media = task.mediaPath || task.imagePath;
+        if (media) {
+          if (MediaProcessor.isVideo(media)) {
+            const videoSrc = normalizedVideoMaster || media;
+            const videoBuffer = await MediaProcessor.mutateVideo(videoSrc, this.videoMutationMode);
+            await this.evolution.sendMediaMessage(jid, videoBuffer, 'video/mp4', message);
+          } else {
+            const imageBuffer = await MediaProcessor.processImage(media);
+            await this.evolution.sendMediaMessage(jid, imageBuffer, 'image/jpeg', message);
+          }
         } else {
           await this.evolution.sendTextMessage(jid, message);
         }
 
+        consecutiveErrors = 0;
         messagesSentInBatch++;
         successCount++;
         this.window.webContents.send('bulk-progress', { status: 'success', number: task.number });
       } catch (error: any) {
         errorCount++;
+        consecutiveErrors++;
         const errorMsg = error?.message || 'Error desconocido al enviar';
         this.window.webContents.send('bulk-progress', {
           status: 'error',
           number: task.number,
           error: errorMsg
         });
+
+        // Mecánica Anti-Flageo: Si ocurren 3 o más errores consecutivos (posible rate-limit o throttle),
+        // activar enfriamiento automático de 45 segundos para proteger la reputación de la cuenta.
+        if (consecutiveErrors >= 3) {
+          const cooldownSec = 45;
+          this.window.webContents.send('bulk-log', {
+            msg: `⚠️ Protección Anti-Flageo activada: ${consecutiveErrors} fallos consecutivos. Enfriando línea por ${cooldownSec}s para proteger la cuenta...`,
+            type: 'error'
+          });
+          this.window.webContents.send('bulk-delay', { delay: cooldownSec * 1000 });
+          for (let c = 0; c < cooldownSec; c++) {
+            if (this.shouldStop) break;
+            await new Promise(res => setTimeout(res, 1000));
+          }
+          consecutiveErrors = 0;
+        }
       }
     }
 
