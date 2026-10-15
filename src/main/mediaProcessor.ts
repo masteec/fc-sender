@@ -62,6 +62,9 @@ export class MediaProcessor {
       const base64Data = imageData.split(';base64,').pop()!;
       buffer = Buffer.from(base64Data, 'base64');
     } else {
+      if (imageData.startsWith('blob:')) {
+        throw new Error(`Ruta de imagen inválida (${imageData}). No se pueden leer URLs en memoria como archivos.`);
+      }
       buffer = await fsPromises.readFile(imageData);
     }
 
@@ -87,6 +90,9 @@ export class MediaProcessor {
    * Normaliza un video a MP4 H.264 / AAC con atom moov al inicio (+faststart) para compatibilidad universal en WhatsApp.
    */
   public static async normalizeVideoMaster(inputPath: string): Promise<string> {
+    if (inputPath.startsWith('blob:')) {
+      throw new Error(`Ruta de video inválida (${inputPath}). Las URLs blob no son accesibles desde el sistema de archivos.`);
+    }
     const tempDir = path.join(app.getPath('temp'), 'fcsender_video_cache');
     await fsPromises.mkdir(tempDir, { recursive: true });
 
@@ -156,6 +162,9 @@ export class MediaProcessor {
     masterInput: string,
     mode: VideoMutationMode = 'fast'
   ): Promise<Buffer> {
+    if (masterInput.startsWith('blob:')) {
+      throw new Error(`Ruta de video inválida (${masterInput}). Las URLs blob no son accesibles desde el sistema de archivos.`);
+    }
     if (mode === 'fast') {
       // Mutación Estructural Rápida de Átomos ISOBMFF
       // Lee el video y añade una caja 'free' estándar con datos pseudoaleatorios al final del contenedor MP4.

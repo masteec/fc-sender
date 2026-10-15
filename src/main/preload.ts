@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // Estado y conexión de Evolution Engine
@@ -9,6 +9,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   getWhatsAppStatus: () => ipcRenderer.send('get-whatsapp-status'),
   logoutWhatsApp: () => ipcRenderer.invoke('logout-whatsapp'),
+
+  // Utilidades de Archivos y Multimedia
+  getPathForFile: (file: File) => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return (file as any).path || '';
+    }
+  },
+  saveTempMedia: (fileName: string, buffer: ArrayBuffer) => ipcRenderer.invoke('save-temp-media', fileName, buffer),
 
   // Validación de Números y Sistema de Reputación
   validateNumbers: (numbers: string[]) => ipcRenderer.invoke('validate-numbers', numbers),

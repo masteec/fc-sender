@@ -75,7 +75,7 @@ export class EvolutionService {
           creds: state.creds,
           keys: makeCacheableSignalKeyStore(state.keys, logger),
         },
-        browser: ['FCSender Evolution', 'Desktop', '2.1.0'],
+        browser: ['FCSender Evolution', 'Desktop', '2.1.1'],
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
         markOnlineOnConnect: true,
@@ -475,6 +475,24 @@ export class EvolutionService {
     ipcMain.handle('logout-whatsapp', async () => {
       await this.logout();
       return true;
+    });
+
+    ipcMain.removeHandler('save-temp-media');
+    ipcMain.handle('save-temp-media', async (_event, fileName: string, buffer: ArrayBuffer) => {
+      try {
+        const tempDir = path.join(app.getPath('temp'), 'fcsender_uploads');
+        await fs.mkdir(tempDir, { recursive: true });
+        const ext = path.extname(fileName) || '.dat';
+        const base = path.basename(fileName, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
+        const safeName = `${base}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}${ext}`;
+        const targetPath = path.join(tempDir, safeName);
+        await fs.writeFile(targetPath, Buffer.from(buffer));
+        console.log('FCSender: Archivo multimedia temporal guardado en:', targetPath);
+        return targetPath;
+      } catch (err) {
+        console.error('Error guardando medio temporal en disco:', err);
+        throw err;
+      }
     });
 
     // Gestión de Blacklist IPC

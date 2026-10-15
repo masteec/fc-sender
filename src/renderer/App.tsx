@@ -55,6 +55,8 @@ declare global {
       onWhatsAppStatus: (callback: (data: WhatsAppStatus) => void) => () => void;
       getWhatsAppStatus: () => void;
       logoutWhatsApp: () => Promise<boolean>;
+      getPathForFile?: (file: File) => string;
+      saveTempMedia?: (fileName: string, buffer: ArrayBuffer) => Promise<string>;
       validateNumbers: (numbers: string[]) => Promise<{
         results: Array<{ number: string; exists: boolean; jid?: string }>;
         validCount: number;
@@ -130,10 +132,17 @@ function App() {
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [selectedSheet, setSelectedSheet] = useState<string>('');
 
-  const [mediaPath, setMediaPath] = useState(() => localStorage.getItem('ws_imgPath') || '');
-  const [mediaPreview, setMediaPreview] = useState(() => localStorage.getItem('ws_imgPrev') || '');
+  const [mediaPath, setMediaPath] = useState(() => {
+    const p = localStorage.getItem('ws_imgPath') || '';
+    return p.startsWith('blob:') ? '' : p;
+  });
+  const [mediaPreview, setMediaPreview] = useState(() => {
+    const p = localStorage.getItem('ws_imgPrev') || '';
+    return p.startsWith('blob:') ? '' : p;
+  });
   const [mediaType, setMediaType] = useState<'image' | 'video' | null>(() => {
     const p = localStorage.getItem('ws_imgPath') || '';
+    if (p.startsWith('blob:')) return null;
     if (/\.(mp4|mov|m4v|3gp|mkv|webm)$/i.test(p)) return 'video';
     if (p) return 'image';
     return null;
@@ -490,10 +499,35 @@ function App() {
     multiple: false
   });
 
-  const handleMediaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMediaChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0] as any;
-      const filePath = file.path || '';
+      let filePath = '';
+
+      // 1. Obtener la ruta real del sistema de archivos mediante webUtils (Electron 28+)
+      if (window.electronAPI?.getPathForFile) {
+        try {
+          filePath = window.electronAPI.getPathForFile(file) || '';
+        } catch (err) {
+          console.warn('Error en getPathForFile:', err);
+        }
+      }
+
+      // 2. Fallback a propiedad path de DOM File si estuviera disponible
+      if (!filePath && file.path && !file.path.startsWith('blob:')) {
+        filePath = file.path;
+      }
+
+      // 3. Fallback de persistencia en disco temporal vía IPC si no hay ruta directa accesible
+      if (!filePath && window.electronAPI?.saveTempMedia) {
+        try {
+          const buf = await file.arrayBuffer();
+          filePath = await window.electronAPI.saveTempMedia(file.name || 'comunicado_adjunto', buf);
+        } catch (saveErr) {
+          console.error('Error al persistir medio en archivo temporal:', saveErr);
+        }
+      }
+
       const sizeMB = Number((file.size / (1024 * 1024)).toFixed(2));
       setMediaSizeMB(sizeMB);
       setMediaPath(filePath);
@@ -550,13 +584,28 @@ function App() {
       return;
     }
 
+    // Ruta de sistema de archivos real (garantizando que nunca sea una URL blob: o data:)
+    const cleanMediaPath = mediaPath && !mediaPath.startsWith('blob:') && !mediaPath.startsWith('data:')
+      ? mediaPath
+      : undefined;
+
+    // Para imágenes, si no hay ruta en disco, permitir el dataURL (base64) del preview
+    const cleanImagePath = mediaType === 'image'
+      ? (cleanMediaPath || (mediaPreview && !mediaPreview.startsWith('blob:') ? mediaPreview : undefined))
+      : undefined;
+
+    if (mediaType === 'video' && !cleanMediaPath) {
+      alert('No se pudo identificar la ruta en disco del archivo de video. Por favor, vuelve a seleccionar el video haciendo clic en la sección de adjunto.');
+      return;
+    }
+
     setInvalidNumbers([]);
     setDeliveryRecords([]);
     const tasks: SendTask[] = numbers.map(number => ({
       number: number.replace(/\D/g, ''),
       text: messageText,
-      imagePath: mediaPath || mediaPreview || undefined,
-      mediaPath: mediaPath || mediaPreview || undefined,
+      imagePath: cleanImagePath,
+      mediaPath: cleanMediaPath,
       mediaType: mediaType || undefined
     }));
 
@@ -827,7 +876,7 @@ function App() {
                   Evolution
                 </span>
                 <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-md">
-                  v2.1.0
+                  v2.1.1
                 </span>
               </h1>
               {waStatus.user && (
