@@ -8,9 +8,9 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/ensure-deps.mjs && tsc -b && vite build",
     "dist": "npm run build && electron-builder -p always",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "node scripts/ensure-deps.mjs && electron-builder install-app-deps",
     "lint": "eslint .",
     "preview": "vite preview"
   },
