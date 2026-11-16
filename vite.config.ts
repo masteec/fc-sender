@@ -11,15 +11,26 @@ export default defineConfig({
     electron({
       main: {
         entry: 'src/main/main.ts',
+        vite: {
+          build: {
+            rollupOptions: {
+              external: [
+                'electron',
+                'electron-updater',
+                '@whiskeysockets/baileys',
+                'pino',
+                'qrcode',
+                'xlsx',
+                'sharp',
+                'axios'
+              ]
+            }
+          }
+        }
       },
       preload: {
         input: 'src/main/preload.ts',
       },
     }),
   ],
-  server: {
-    watch: {
-      ignored: ['**/evolution_auth/**', '**/.wwebjs_auth/**'],
-    },
-  },
 })

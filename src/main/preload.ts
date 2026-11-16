@@ -1,71 +1,57 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
+
+type Listener<T> = (data: T) => void;
+
+function subscribe<T>(channel: string, callback: Listener<T>) {
+  const handler = (_event: IpcRendererEvent, data: T) => callback(data);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+}
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  // Estado y conexión de Evolution Engine
-  onWhatsAppStatus: (callback: (data: any) => void) => {
-    const handler = (_event: any, data: any) => callback(data);
-    ipcRenderer.on('whatsapp-status', handler);
-    return () => ipcRenderer.removeListener('whatsapp-status', handler);
-  },
-  getWhatsAppStatus: () => ipcRenderer.send('get-whatsapp-status'),
-  logoutWhatsApp: () => ipcRenderer.invoke('logout-whatsapp'),
-
-  // Utilidades de Archivos y Multimedia
   getPathForFile: (file: File) => {
     try {
       return webUtils.getPathForFile(file);
     } catch {
-      return (file as any).path || '';
+      return '';
     }
   },
-  saveTempMedia: (fileName: string, buffer: ArrayBuffer) => ipcRenderer.invoke('save-temp-media', fileName, buffer),
 
-  // Validación de Números y Sistema de Reputación
-  validateNumbers: (numbers: string[]) => ipcRenderer.invoke('validate-numbers', numbers),
+  onWhatsAppStatus: (cb: Listener<unknown>) => subscribe('whatsapp-status', cb),
+  getWhatsAppStatus: () => ipcRenderer.send('get-whatsapp-status'),
+  logoutWhatsApp: () => ipcRenderer.invoke('whatsapp-logout'),
+  checkWhatsAppNumber: (phone: string) => ipcRenderer.invoke('whatsapp-check-number', phone),
+  checkWhatsAppBatch: (phones: string[]) => ipcRenderer.invoke('whatsapp-check-batch', phones),
 
-  // Gestión de Lista Negra (Opt-Out)
-  getBlacklist: () => ipcRenderer.invoke('get-blacklist'),
-  addToBlacklist: (phone: string, reason?: string) => ipcRenderer.invoke('add-to-blacklist', phone, reason),
-  removeFromBlacklist: (phone: string) => ipcRenderer.invoke('remove-from-blacklist', phone),
-  clearBlacklist: () => ipcRenderer.invoke('clear-blacklist'),
-  onBlacklistUpdated: (callback: (data: any[]) => void) => {
-    const handler = (_event: any, data: any[]) => callback(data);
-    ipcRenderer.on('blacklist-updated', handler);
-    return () => ipcRenderer.removeListener('blacklist-updated', handler);
-  },
+  getSettings: () => ipcRenderer.send('get-settings'),
+  saveSettings: (settings: unknown) => ipcRenderer.invoke('save-settings-invoke', settings),
+  onAppSettingsData: (cb: Listener<unknown>) => subscribe('app-settings-data', cb),
 
-  // Control de Envíos Masivos
-  startBulkSend: (tasks: any[], config: any) => ipcRenderer.send('start-bulk-send', tasks, config),
+  startBulkSend: (tasks: unknown[], config: unknown) => ipcRenderer.send('start-bulk-send', tasks, config),
+  resumeBulkSend: (config: unknown) => ipcRenderer.send('resume-bulk-send', config),
+  retryFailedSend: (config: unknown) => ipcRenderer.send('retry-failed-send', config),
   stopBulkSend: () => ipcRenderer.send('stop-bulk-send'),
+  getQueueSummary: () => ipcRenderer.invoke('queue-get-summary'),
+  clearQueue: () => ipcRenderer.invoke('queue-clear'),
 
-  // Eventos de monitoreo en tiempo real
-  onBulkSenderUpdate: (callback: (data: any) => void) => {
-    const handler = (_event: any, data: any) => callback(data);
-    ipcRenderer.on('bulk-update', handler);
-    return () => ipcRenderer.removeListener('bulk-update', handler);
-  },
+  getBlacklist: () => ipcRenderer.invoke('blacklist-get-all'),
+  addToBlacklist: (phone: string, reason?: string) => ipcRenderer.invoke('blacklist-add', phone, reason),
+  removeFromBlacklist: (phone: string) => ipcRenderer.invoke('blacklist-remove', phone),
+  onBlacklistUpdated: (cb: Listener<void>) => subscribe('blacklist-updated', cb),
 
-  onBulkSenderProgress: (callback: (data: any) => void) => {
-    const handler = (_event: any, data: any) => callback(data);
-    ipcRenderer.on('bulk-progress', handler);
-    return () => ipcRenderer.removeListener('bulk-progress', handler);
-  },
+  openLogsFolder: () => ipcRenderer.invoke('logs-open-folder'),
+  openReportFile: (filePath: string) => ipcRenderer.invoke('reports-open-file', filePath),
+  openExternal: (url: string) => ipcRenderer.send('open-external', url),
 
-  onBulkSenderDelay: (callback: (data: any) => void) => {
-    const handler = (_event: any, data: any) => callback(data);
-    ipcRenderer.on('bulk-delay', handler);
-    return () => ipcRenderer.removeListener('bulk-delay', handler);
-  },
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  getUpdaterStatus: () => ipcRenderer.invoke('updater-get-status'),
+  checkForUpdates: () => ipcRenderer.invoke('updater-check'),
+  installUpdate: () => ipcRenderer.invoke('updater-install'),
+  onUpdaterStatus: (cb: Listener<unknown>) => subscribe('updater-status', cb),
 
-  onBulkSenderLog: (callback: (data: any) => void) => {
-    const handler = (_event: any, data: any) => callback(data);
-    ipcRenderer.on('bulk-log', handler);
-    return () => ipcRenderer.removeListener('bulk-log', handler);
-  },
-
-  onBulkSenderFinish: (callback: (data: any) => void) => {
-    const handler = (_event: any, data: any) => callback(data);
-    ipcRenderer.on('bulk-finish', handler);
-    return () => ipcRenderer.removeListener('bulk-finish', handler);
-  }
+  onBulkSenderUpdate: (cb: Listener<unknown>) => subscribe('bulk-update', cb),
+  onBulkSenderProgress: (cb: Listener<unknown>) => subscribe('bulk-progress', cb),
+  onBulkSenderDelay: (cb: Listener<unknown>) => subscribe('bulk-delay', cb),
+  onBulkSenderLog: (cb: Listener<unknown>) => subscribe('bulk-log', cb),
+  onBulkSenderFinish: (cb: Listener<unknown>) => subscribe('bulk-finish', cb)
 });

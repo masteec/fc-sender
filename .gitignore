@@ -8,18 +8,24 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Node / Build artifacts
-node_modules
-dist
-dist-electron
-dist-ssr
-release
+node_modules/
+dist/
+dist-electron/
+dist-ssr/
+release/
 *.local
 
 # Auth sessions & caches
 evolution_auth/
+sender_storage/
 .wwebjs_auth/
 .wwebjs_cache/
+puppeteer-browser/
+.puppeteerrc.cjs
+pwa-port/
 blacklist.json
+.env
+.env.*
 
 # Editor directories and files
 .vscode/*
